@@ -1,4 +1,4 @@
-import { prototypes as P, utils as U, constants as C } from '/game';
+import { prototypes as P, utils as U, constants as C, getTicks } from '/game';
 
 const head = ([h]) => h;
 const tail = ([, ...t]) => t;
@@ -24,9 +24,17 @@ const enStructs = {
     towers: [],
 }
 
+let workerDowntime = 0;
+let tickDowntime;
+
 let containers;
 
+
+
 export function loop() {
+    console.log(C)
+    tickDowntime = 0;
+
     if(!myStructs.spawns.length) {
         myStructs.spawns.push(U.getObjectsByPrototype(P.StructureSpawn).filter(s => s.my)[0]);
     }
@@ -47,6 +55,7 @@ export function loop() {
     }
 
 
+
     // Fighter Logic, incredibly stupid
     for ( let creep of myCreeps.fighters ) {
         if (enCreeps.units.length) {
@@ -55,6 +64,9 @@ export function loop() {
             actionMove(creep, enStructs.spawns)
         }
     }
+
+    
+    tickDowntime = 0;
 
     // Worker Logic, lots of inefficiencies
     for (let creep of myCreeps.workers.filter(w => w.store) ) {
@@ -65,13 +77,19 @@ export function loop() {
             }
         }
         else {
-            if ( creep.transfer(myStructs.spawns[0], C.RESOURCE_ENERGY) ) {
-                creep.moveTo(myStructs.spawns[0])
-            }
+            let transferReturn = creep.transfer(myStructs.spawns[0], C.RESOURCE_ENERGY);
+            if ( transferReturn == C.ERR_NOT_IN_RANGE) { creep.moveTo(myStructs.spawns[0]); }
+            else if ( transferReturn == C.ERR_FULL ) { tickDowntime = 1; }
         }
     }
 
-
+    
+    if ( tickDowntime ) { 
+        workerDowntime += tickDowntime;
+        let downtimePercent = workerDowntime/getTicks() * 100;
+        console.log(`Worker Downtime: ${workerDowntime}t, ${downtimePercent.toFixed(2)}%`)
+     }
+    
 }
 // Need a MUCH better priority system
 // ( action(target) || creep.action(target) )
@@ -111,13 +129,15 @@ const roles = {
         ref: myCreeps.workers,
     },
     attacker: {
-        build: [C.MOVE, C.ATTACK, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK,  C.MOVE, C.ATTACK],
+        // Cost : 1000e
+        build: [C.TOUGH, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK,  C.MOVE, C.ATTACK, C.MOVE],
         action: 'attack',
         ref: myCreeps.fighters,
 
     },
     heavyRanged: {
-        build: [C.RANGED_ATTACK, C.RANGED_ATTACK, C.RANGED_ATTACK, C.RANGED_ATTACK, C.MOVE],
+        // Cost : 1000e
+        build: [C.RANGED_ATTACK, C.RANGED_ATTACK, C.RANGED_ATTACK, C.RANGED_ATTACK, C.RANGED_ATTACK, C.MOVE, C.MOVE, C.MOVE, C.MOVE, C.MOVE],
         action: 'attack',
         ref: myCreeps.fighters,
 
@@ -126,15 +146,20 @@ const roles = {
         build: [C.TOUGH, C.TOUGH, C.TOUGH, C.MOVE, C.RANGED_ATTACK, C.RANGED_ATTACK],
         action: 'rangedAttack',
         ref: myCreeps.fighters,
+    },
+    medic: {
+        build: [C.TOUGH, C.MOVE, C.HEAL, C.MOVE, C.MOVE,  C.MOVE, C.HEAL],
+        action: 'heal',
+        ref: myCreeps.fighters,
     }
 }
 
 let build =    [roles.worker,
-                roles.worker,
+                //roles.worker,
                 roles.worker,]
 
 let combatBuild =  [roles.attacker,
-                    roles.attacker,
+                    roles.rangedAttacker,
                     roles.attacker,
                     roles.attacker,
                     roles.attacker,
@@ -142,3 +167,5 @@ let combatBuild =  [roles.attacker,
                     roles.attacker,
                     roles.attacker,
                     roles.worker,]
+
+// undefinedValue ??= valueIfLeftIsNull
