@@ -1,7 +1,5 @@
 import { prototypes as P, utils as U, constants as C, getTicks } from '/game';
-
-const head = ([h]) => h;
-const tail = ([, ...t]) => t;
+import * as L from "./lib.mjs";
 
 const myCreeps = {
     fighters: [],
@@ -24,31 +22,43 @@ const enStructs = {
     towers: [],
 }
 
-let workerDowntime = 0;
-let tickDowntime;
-
 let containers;
 
 
+let workerWastedTime = 0;
+let workerWastedTick = false;
+let workerWastedLastTick = false;
+let workerTimePercent = 0;
+
+let spawnerWastedTime = 0;
+let spawnerWastedTick = false;
+let spawnerWastedLastTick = false;
+let spawnerTimePercent = 0;
 
 export function loop() {
-    console.log(C)
-    tickDowntime = 0;
 
-    if(!myStructs.spawns.length) {
-        myStructs.spawns.push(U.getObjectsByPrototype(P.StructureSpawn).filter(s => s.my)[0]);
-    }
+
+    if(!myStructs.spawns.length) myStructs.spawns.push(U.getObjectsByPrototype(P.StructureSpawn).filter(s => s.my)[0]);
     
-    containers = U.getObjectsByPrototype(P.StructureContainer);
 
+
+    containers = U.getObjectsByPrototype(P.StructureContainer);
     enStructs.spawns = U.getObjectsByPrototype(P.StructureSpawn).filter(s => !s.my);
     enCreeps.units = U.getObjectsByPrototype(P.Creep).filter(s => !s.my);
 
+    // Enemy Spawn Accounting - CURRENT FOCUS!!
+    for (let creep of enCreeps.units) {
+        if (!creep.scanned) {
+            creep.scanned = true;
+            debugAssess(creep, "NEW ENCREEP")
+        }
+    }
+
     // Spawn Logic
-    // Drops Ticks on Build -> combatBuild
-    if ( build.length ) {
-        if ( spawnCreep(myStructs.spawns[0], head(build)) ) {
-        build = tail(build);
+    // Drops Ticks on Build -> combatBuild but Build shift is always tick AFTER other spawn. so nbd
+    if (build.length) {
+        if ( spawnCreep(myStructs.spawns[0], L.head(build)) ) {
+        build = L.tail(build);
         }
     } else {
         build = combatBuild;
@@ -57,49 +67,65 @@ export function loop() {
 
 
     // Fighter Logic, incredibly stupid
-    for ( let creep of myCreeps.fighters ) {
+    for (let creep of myCreeps.fighters) {
         if (enCreeps.units.length) {
-            actionMove(creep, enCreeps.units)
+            actionMove(creep, enCreeps.units, true)
         } else {
-            actionMove(creep, enStructs.spawns)
+            actionMove(creep, enStructs.spawns, false)
         }
     }
 
-    
-    tickDowntime = 0;
 
     // Worker Logic, lots of inefficiencies
     for (let creep of myCreeps.workers.filter(w => w.store) ) {
-        if ( creep.store.getFreeCapacity(C.RESOURCE_ENERGY) ) {
+        if (creep.store.getFreeCapacity(C.RESOURCE_ENERGY)) {
             let container = U.findClosestByPath(creep, containers.filter(c => c.store.energy));
-            if ( creep.withdraw(container, C.RESOURCE_ENERGY) ) {
+            if (creep.withdraw(container, C.RESOURCE_ENERGY)) {
                 creep.moveTo(container);
             }
-        }
-        else {
+        } else {
             let transferReturn = creep.transfer(myStructs.spawns[0], C.RESOURCE_ENERGY);
-            if ( transferReturn == C.ERR_NOT_IN_RANGE) { creep.moveTo(myStructs.spawns[0]); }
-            else if ( transferReturn == C.ERR_FULL ) { tickDowntime = 1; }
+            if (transferReturn == C.ERR_NOT_IN_RANGE) { creep.moveTo(myStructs.spawns[0]); }
+            else if (transferReturn == C.ERR_FULL) {workerWastedTick = true;}
         }
     }
 
-    
-    if ( tickDowntime ) { 
-        workerDowntime += tickDowntime;
-        let downtimePercent = workerDowntime/getTicks() * 100;
-        console.log(`Worker Downtime: ${workerDowntime}t, ${downtimePercent.toFixed(2)}%`)
-     }
-    
+
+    // Economy Analytics
+    // Consider: show when worker downtime starfts/stops on the tick
+    workerWastedTime += workerWastedTick;
+    if (!workerWastedLastTick && workerWastedTick) workerWastedLastTick = workerWastedTick, console.log("Worker STARTS wasting ticks");
+    if (workerWastedLastTick && !workerWastedTick) {
+        workerWastedLastTick = workerWastedTick;
+        workerTimePercent = workerWastedTime/getTicks() * 100;
+        console.log(`Worker STOPS wasting ticks | Total Downtime: ${workerWastedTime}t, ${workerTimePercent.toFixed(2)}%`);
+    }
+    workerWastedTick = false;
+
+    spawnerWastedTime += spawnerWastedTick;
+    if (!spawnerWastedLastTick && spawnerWastedTick) spawnerWastedLastTick = spawnerWastedTick, console.log("Spawner STARTS wasting ticks");
+    if (spawnerWastedLastTick && !spawnerWastedTick) {
+        spawnerWastedLastTick = spawnerWastedTick;
+        spawnerTimePercent = spawnerWastedTime/getTicks() * 100;
+        console.log(`Spawner STOPS wasting ticks | Total Downtime: ${spawnerWastedTime}t, ${spawnerTimePercent.toFixed(2)}%`);
+    }
+    spawnerWastedTick = false;   
 }
+
 // Need a MUCH better priority system
 // ( action(target) || creep.action(target) )
-function actionMove(creep, targets, action) {
+function actionMove(creep, targets, isCreep) {
     let target = U.findClosestByPath(creep, targets);
-    if ( creep.action(target) ) {
-        creep.moveTo(target);
+    if (!creep.action(target) && creep.body && isCreep) {
+        debugAssess(target, "ENEMY")
+        debugAssess(creep, "ALLY")
     }
+        creep.moveTo(target);
 }
 
+function debugAssess(c, name) {
+    console.log(`${name}: Health ${c.hits} / ${c.hitsMax} Speed: ${L.assessMobility(c).toFixed(2)} Heal: ${L.assessHeal(c)} Ranged: ${L.assessRangedAttack(c)} Melee: ${L.assessMeleeAttack(c)} Damage: ${L.assessTotalAttack(c)}`);
+}
 
 // Future Change:
 // Allow for Intermediary Action Function that takes Creep functions as inputs
@@ -114,7 +140,10 @@ function spawnCreep(spawner, role) {
          // Push to Correct Struct
          role.ref.push(creep);
          return true;
-     } else { return false; }
+     } else {
+        if(spawnReturn.error == C.ERR_NOT_ENOUGH_ENERGY) spawnerWastedTick = true;
+        return false; 
+    }
 }
 
 const roles = {
@@ -130,7 +159,7 @@ const roles = {
     },
     attacker: {
         // Cost : 1000e
-        build: [C.TOUGH, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK, C.MOVE, C.ATTACK,  C.MOVE, C.ATTACK, C.MOVE],
+        build: [C.TOUGH, C.ATTACK, C.ATTACK, C.ATTACK, C.ATTACK, C.ATTACK, C.ATTACK, C.ATTACK, C.MOVE, C.MOVE, C.MOVE, C.MOVE, C.MOVE, C.MOVE, C.MOVE, ],
         action: 'attack',
         ref: myCreeps.fighters,
 
@@ -148,7 +177,7 @@ const roles = {
         ref: myCreeps.fighters,
     },
     medic: {
-        build: [C.TOUGH, C.MOVE, C.HEAL, C.MOVE, C.MOVE,  C.MOVE, C.HEAL],
+        build: [C.TOUGH, C.HEAL, C.HEAL, C.MOVE, C.MOVE, C.MOVE, C.MOVE,],
         action: 'heal',
         ref: myCreeps.fighters,
     }
@@ -168,4 +197,4 @@ let combatBuild =  [roles.attacker,
                     roles.attacker,
                     roles.worker,]
 
-// undefinedValue ??= valueIfLeftIsNull
+
